@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Neural Flora: Ultra-Fast Evolution</title>
+<style>
+:root{
+  --bg0:#061018; --bg1:#0c1b2a; --bg2:#12263a;
+  --fg:#d7f5ff; --muted:#7fb4c7; --accent:#5bffb1; --accent2:#46b3ff; --warn:#ffcc6b;
+  --panel:#0a1622cc; --panel2:#0c1a29f2;
+}
+*{box-sizing:border-box;}
+html,body{height:100%; margin:0; background:radial-gradient(1200px 800px at 20% 20%, #0b2233 0%, #061018 60%); color:var(--fg); font:14px/1.4 "Segoe UI", "Noto Sans JP", system-ui, sans-serif;}
+#app{display:grid; grid-template-columns:1fr 320px; height:100%;}
+header{
+  grid-column:1 / -1;
+  display:flex; gap:8px; align-items:center; padding:8px 10px;
+  background:linear-gradient(90deg, #0b1a27, #0a1620 60%, #0d1f2e);
+  border-bottom:1px solid #0f2a3b; position:relative; z-index:2;
+}
+header .btn, header input, header label, header .stat{
+  background:#0b1d2a; color:var(--fg); border:1px solid #123246; border-radius:8px; padding:6px 10px; white-space:nowrap;
+}
+header .btn{cursor:pointer; transition:transform .06s ease, box-shadow .2s ease;}
+header .btn:hover{box-shadow:0 0 12px #2b88ffaa;}
+header .btn:active{transform:translateY(1px);}
+header .btn.toggled{background:#12364d; border-color:#2a7aa5; box-shadow:0 0 10px #2a7aa588;}
+header input{width:90px;}
+header .stat{background:transparent; border-color:transparent; color:var(--muted); padding:0 6px;}
+#canvasWrap{position:relative; overflow:hidden;}
+canvas{display:block; width:100%; height:100%;}
+#rightPanel{
+  background:linear-gradient(180deg, #091623, #0a1d2d 60%, #091826);
+  border-left:1px solid #0f2a3b; padding:14px 14px 18px; overflow:auto;
+}
+#rightPanel h2{font-size:16px; margin:4px 0 10px; color:#bfe9ff;}
+#rightPanel p{color:#9cc7da; margin:0 0 10px;}
+#rightPanel .note{color:#76e4b3;}
+#hud{
+  position:absolute; left:12px; bottom:10px; color:#9bc1d3; font-size:12px;
+  background:#0a1622aa; border:1px solid #0e2b40; border-radius:8px; padding:6px 8px;
+}
+#light{
+  position:absolute; right:18px; top:70px; width:140px; height:140px; border-radius:50%;
+  background:radial-gradient(circle, #fff4b8 0%, #ffe08a55 45%, #ffe08a00 70%);
+  filter:blur(1px); mix-blend-mode:screen; pointer-events:none;
+  box-shadow:0 0 24px #ffd778aa;
+}
+#bestBadge{
+  position:absolute; left:16px; top:70px; color:#072019; background:#5bffb1;
+  padding:4px 8px; border-radius:6px; font-weight:600; box-shadow:0 0 10px #5bffb188; display:none;
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button id="startBtn" class="btn">Start</button>
+    <button id="fastBtn" class="btn">Fast-forward 200x</button>
+    <button id="nextGenBtn" class="btn">Next Generation</button>
+    <label class="btn" style="display:flex; align-items:center; gap:6px;">
+      <input type="checkbox" id="autoToggle" /> Auto-Evolve
+    </label>
+    <button id="resetBtn" class="btn">Reset</button>
+    <label style="display:flex; align-items:center; gap:6px;">
+      <span style="color:var(--muted)">Seed</span>
+      <input id="seedInput" value="42" />
+    </label>
+    <div class="stat">Gen: <span id="genStat">1</span></div>
+    <div class="stat">Best: <span id="bestStat">0</span></div>
+    <div class="stat">FPS: <span id="fpsStat">0</span></div>
+    <div class="stat">Pop: <span id="popStat">0</span></div>
+  </header>
+  <div id="canvasWrap">
+    <canvas id="sim"></canvas>
+    <div id="bestBadge">BEST</div>
+    <div id="light"></div>
+    <div id="hud">Neural plant growth simulation</div>
+  </div>
+  <aside id="rightPanel">
+    <h2>デモの説明</h2>
+    <p>このデモでは、植物の成長を「小さなニューラルネット」で制御し、世代交代の進化で性能を改善していきます。</p>
+    <p>各植物は茎を伸ばし、分岐し、葉を作ります。光源に近づき、安定して立ち、無駄のない分岐をすると適応度（Fitness）が高くなります。</p>
+    <p>世代ごとに、優秀な個体はエリートとして保存され、トーナメント選択で親を選び、交叉と突然変異で新しい個体が生まれます。</p>
+    <p class="note">右上の光の位置に向かって背を伸ばすほど有利です。黄色い光の近くほどエネルギーが溜まりやすくなります。</p>
+    <p>Fast-forwardで時間を早送りし、Auto-Evolveをオンにすると一定時間ごとに自動で次世代へ進みます。</p>
+  </aside>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('sim');
+  const ctx = canvas.getContext('2d');
+  const bestBadge = document.getElementById('bestBadge');
+  const genStat = document.getElementById('genStat');
+  const bestStat = document.getElementById('bestStat');
+  const fpsStat = document.getElementById('fpsStat');
+  const popStat = document.getElementById('popStat');
+  const startBtn = document.getElementById('startBtn');
+  const fastBtn = document.getElementById('fastBtn');
+  const nextGenBtn = document.getElementById('nextGenBtn');
+  const autoToggle = document.getElementById('autoToggle');
+  const resetBtn = document.getElementById('resetBtn');
+  const seedInput = document.getElementById('seedInput');
+
+  let W = 0, H = 0, DPR = window.devicePixelRatio || 1;
+  function resize(){
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Simple seeded RNG
+  function makeRng(seed){
+    let s = seed >>> 0;
+    return function(){
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return (s & 0xffffffff) / 0xffffffff;
+    };
+  }
+
+  // Neural network: 6 inputs -> 8 hidden -> 5 outputs
+  class MLP{
+    constructor(rng){
+      this.w1 = new Float32Array(6*8);
+      this.w2 = new Float32Array(8*5);
+      for(let i=0;i<this.w1.length;i++) this.w1[i] = (rng()*2-1)*0.8;
+      for(let i=0;i<this.w2.length;i++) this.w2[i] = (rng()*2-1)*0.8;
+    }
+    clone(){
+      const n = Object.create(MLP.prototype);
+      n.w1 = new Float32Array(this.w1);
+      n.w2 = new Float32Array(this.w2);
+      return n;
+    }
+    static crossover(a,b,rng){
+      const c = a.clone();
+      for(let i=0;i<c.w1.length;i++) c.w1[i] = rng()<0.5 ? a.w1[i] : b.w1[i];
+      for(let i=0;i<c.w2.length;i++) c.w2[i] = rng()<0.5 ? a.w2[i] : b.w2[i];
+      return c;
+    }
+    mutate(rng, rate=0.1, sigma=0.2){
+      for(let i=0;i<this.w1.length;i++) if(rng()<rate) this.w1[i]+= gaussian(rng)*sigma;
+      for(let i=0;i<this.w2.length;i++) if(rng()<rate) this.w2[i]+= gaussian(rng)*sigma;
+    }
+    forward(inp){
+      const h = new Float32Array(8);
+      for(let i=0;i<8;i++){
+        let sum=0; for(let j=0;j<6;j++) sum += inp[j]*this.w1[i*6+j];
+        h[i] = Math.tanh(sum);
+      }
+      const out = new Float32Array(5);
+      for(let i=0;i<5;i++){
+        let sum=0; for(let j=0;j<8;j++) sum += h[j]*this.w2[i*8+j];
+        out[i] = Math.tanh(sum);
+      }
+      return out;
+    }
+  }
+
+  function gaussian(rng){
+    let u=0,v=0; while(u===0) u=rng(); while(v===0) v=rng();
+    return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+  }
+
+  class Plant{
+    constructor(brain){
+      this.brain = brain;
+      this.reset();
+    }
+    reset(){
+      this.segments = [{x:0,y:0,angle:-Math.PI/2,length:4,energy:1}];
+      this.leaves = [];
+      this.age = 0; this.energy = 1; this.fitness = 0; this.alive = true;
+    }
+    step(env){
+      if(!this.alive) return;
+      const head = this.segments[this.segments.length-1];
+      const lx = env.light.x, ly = env.light.y;
+      const dx = lx - head.x, dy = ly - head.y;
+      const dist = Math.sqrt(dx*dx+dy*dy) + 0.001;
+      const lightDir = Math.atan2(dy, dx);
+      const angleDiff = Math.atan2(Math.sin(lightDir-head.angle), Math.cos(lightDir-head.angle));
+
+      const inp = new Float32Array([
+        head.angle/Math.PI, angleDiff/Math.PI, Math.min(dist/300,1), this.energy/5, this.age/300, this.segments.length/30
+      ]);
+      const out = this.brain.forward(inp);
+      const turn = out[0];
+      const grow = (out[1]+1)/2;
+      const branch = (out[2]+1)/2;
+      const leaf = (out[3]+1)/2;
+      const stabilize = (out[4]+1)/2;
+
+      // energy gain from light + leaves
+      const lightGain = Math.max(0, 1 - dist/260) * 0.08;
+      const leafGain = this.leaves.length * 0.002;
+      this.energy += lightGain + leafGain - 0.01 - grow*0.02 - branch*0.02;
+      if(this.energy < -0.2){ this.alive=false; return; }
+
+      head.angle += turn * 0.08;
+      if(grow>0.25){
+        const len = 2.2 + grow*3.5;
+        const nx = head.x + Math.cos(head.angle)*len;
+        const ny = head.y + Math.sin(head.angle)*len;
+        this.segments.push({x:nx,y:ny,angle:head.angle,length:len,energy:this.energy});
+      }
+      if(branch>0.65 && this.segments.length<26){
+        const idx = Math.max(1, this.segments.length-2);
+        const base = this.segments[idx];
+        const ang = base.angle + (branch>0.8? 0.6 : -0.6);
+        const nx = base.x + Math.cos(ang)*3;
+        const ny = base.y + Math.sin(ang)*3;
+        this.segments.push({x:nx,y:ny,angle:ang,length:3,energy:this.energy});
+      }
+      if(leaf>0.55){
+        this.leaves.push({x:head.x, y:head.y, r:2+leaf*4});
+      }
+
+      // stability penalty
+      const tilt = Math.abs(Math.sin(head.angle));
+      const stability = 1 - tilt*0.6 - (1-stabilize)*0.4;
+      const height = -head.y;
+      this.fitness += height*0.001 + stability*0.05 + this.leaves.length*0.003;
+      this.age++;
+      if(this.age>300) this.alive=false;
+    }
+  }
+
+  const env = { light: {x:0,y:0} };
+  let rng = makeRng(42);
+
+  const POP = 48;
+  let population = [];
+  let generation = 1;
+  let bestIndex = 0;
+  let running = false;
+  let fast = false;
+  let auto = false;
+  let ticks = 0;
+
+  function initPop(){
+    population = new Array(POP).fill(0).map(()=> new Plant(new MLP(rng)));
+    popStat.textContent = POP;
+  }
+
+  function resetAll(){
+    rng = makeRng(parseInt(seedInput.value||"42",10) || 42);
+    generation = 1; ticks=0; running=false; fast=false; auto=false;
+    startBtn.textContent = 'Start'; fastBtn.classList.remove('toggled'); autoToggle.checked=false;
+    initPop();
+  }
+
+  function evaluate(){
+    let best = -1e9; bestIndex = 0;
+    for(let i=0;i<population.length;i++){
+      const f = population[i].fitness;
+      if(f>best){ best=f; bestIndex=i; }
+    }
+    return best;
+  }
+
+  function tournament(k=4){
+    let best=-1e9, idx=0;
+    for(let i=0;i<k;i++){
+      const j = Math.floor(rng()*population.length);
+      if(population[j].fitness>best){ best=population[j].fitness; idx=j; }
+    }
+    return population[idx];
+  }
+
+  function nextGeneration(){
+    const eliteCount = 4;
+    const sorted = population.slice().sort((a,b)=>b.fitness-a.fitness);
+    const newPop = [];
+    for(let i=0;i<eliteCount;i++) newPop.push(new Plant(sorted[i].brain.clone()));
+    while(newPop.length<POP){
+      const p1 = tournament();
+      const p2 = tournament();
+      const child = new Plant(MLP.crossover(p1.brain, p2.brain, rng));
+      child.brain.mutate(rng, 0.12, 0.25);
+      newPop.push(child);
+    }
+    population = newPop;
+    generation++;
+    ticks=0;
+  }
+
+  function simulate(stepCount){
+    for(let s=0;s<stepCount;s++){
+      for(const p of population) p.step(env);
+      ticks++;
+      if(ticks>340 || population.every(p=>!p.alive)) break;
+    }
+  }
+
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = '#061018';
+    ctx.fillRect(0,0,W,H);
+
+    // background glow
+    const g = ctx.createRadialGradient(W*0.7,H*0.1,20, W*0.7,H*0.1, 260);
+    g.addColorStop(0,'#ffeaa050'); g.addColorStop(1,'#ffeaa000');
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+    const cols = 4; const rows = 3;
+    const pad = 40;
+    const cellW = (W - pad*2) / cols;
+    const cellH = (H - pad*2) / rows;
+
+    bestBadge.style.display = 'none';
+
+    for(let i=0;i<12;i++){
+      const p = population[i];
+      const cx = pad + (i%cols + 0.5)*cellW;
+      const cy = pad + (Math.floor(i/cols) + 1)*cellH;
+      const baseY = cy + cellH*0.35;
+
+      ctx.save();
+      ctx.translate(cx, baseY);
+
+      const isBest = (i===bestIndex);
+      if(isBest){
+        bestBadge.style.display = 'block';
+        bestBadge.style.left = (cx-24)+'px';
+        bestBadge.style.top = (baseY-cellH*0.55)+'px';
+      }
+
+      // draw stems
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = isBest ? '#7cffc6' : '#2fd18d';
+      ctx.shadowColor = isBest ? '#7cffc6' : '#2fd18d';
+      ctx.shadowBlur = isBest ? 12 : 6;
+      ctx.beginPath();
+      let prev = {x:0,y:0};
+      for(const seg of p.segments){
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(seg.x*2, seg.y*2);
+        prev = {x:seg.x*2, y:seg.y*2};
+      }
+      ctx.stroke();
+
+      // leaves
+      ctx.shadowBlur = 8;
+      for(const leaf of p.leaves){
+        ctx.fillStyle = isBest ? '#b6ffe2' : '#8cf5c8';
+        ctx.beginPath();
+        ctx.ellipse(leaf.x*2, leaf.y*2, leaf.r, leaf.r*0.6, leaf.r, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    // top strip guides
+    ctx.strokeStyle = '#0e2a3a';
+    ctx.lineWidth = 1;
+    for(let i=0;i<cols;i++){
+      const x = pad + i*cellW;
+      ctx.strokeRect(x, pad, cellW, cellH*rows-10);
+    }
+  }
+
+  let lastTime = performance.now();
+  function loop(t){
+    const dt = t - lastTime; lastTime = t;
+    const steps = fast ? 200 : 1;
+    if(running){
+      simulate(steps);
+      if(auto && (ticks>340 || population.every(p=>!p.alive))){
+        const best = evaluate();
+        bestStat.textContent = best.toFixed(2);
+        nextGeneration();
+      }
+    }
+    const best = evaluate();
+    bestStat.textContent = best.toFixed(2);
+    genStat.textContent = generation;
+    render();
+    fpsStat.textContent = (1000/dt).toFixed(0);
+    requestAnimationFrame(loop);
+  }
+
+  function updateLight(){
+    env.light.x = W*0.7 - W*0.5; // relative to plant origin
+    env.light.y = -H*0.35;
+  }
+  window.addEventListener('resize', updateLight);
+  updateLight();
+
+  startBtn.onclick = ()=>{
+    running = !running;
+    startBtn.textContent = running ? 'Pause' : 'Start';
+  };
+  fastBtn.onclick = ()=>{
+    fast = !fast;
+    fastBtn.classList.toggle('toggled', fast);
+  };
+  nextGenBtn.onclick = ()=>{
+    const best = evaluate();
+    bestStat.textContent = best.toFixed(2);
+    nextGeneration();
+  };
+  autoToggle.onchange = ()=>{ auto = autoToggle.checked; };
+  resetBtn.onclick = ()=>{ resetAll(); };
+
+  resetAll();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

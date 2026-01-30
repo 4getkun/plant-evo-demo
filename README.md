@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Neural Flora Demo
 
 ## Run locally
@@ -20,3 +21,7 @@ Fitness rewards:
 - Stability (not tilting too much).
 - Efficient branching and leaf area exposed to light.
 
+=======
+# plant-evo-demo
+デモです
+>>>>>>> f408aa2f2a156b81fb4e71664714992138cb9f64
